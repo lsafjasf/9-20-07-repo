@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git 提交图与变基可视化器</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">⎇ GitLab</div>
+    <div class="tb-group">
+      <button data-act="commit" title="用工作区内容在当前 HEAD 上创建提交">＋ 提交</button>
+      <button data-act="branch" title="在当前提交创建新分支">⑂ 分支</button>
+      <button data-act="tag" title="在当前提交打标签">🏷 标签</button>
+      <button data-act="checkout-branch" title="切换到其它分支">切换</button>
+      <button data-act="detach" title="让 HEAD 脱离分支指针">detach HEAD</button>
+      <span class="sep"></span>
+      <button data-act="merge" title="把选中分支合并到当前分支">⟲ merge</button>
+      <button data-act="rebase" title="把当前分支变基到选中分支之上">rebase</button>
+      <button data-act="rebase-onto" title="rebase --onto：截取分支一段移植">rebase --onto</button>
+      <button data-act="cherry-pick" title="摘取选中提交到当前分支">🍒 cherry-pick</button>
+      <button data-act="revert" title="用新提交反向抵消选中提交">revert</button>
+      <span class="sep"></span>
+      <button data-act="reset-soft" title="移动分支指针，保留暂存与工作区">reset --soft</button>
+      <button data-act="reset-mixed" title="移动指针并清空暂存区">reset --mixed</button>
+      <button data-act="reset-hard" title="彻底丢弃提交后的所有改动">reset --hard</button>
+    </div>
+    <div class="tb-group right">
+      <button data-act="undo" title="撤销上一步操作">↶ 撤销</button>
+      <button data-act="redo" title="重做">↷ 重做</button>
+      <span class="sep"></span>
+      <select id="examples" title="载入内置示例">
+        <option value="">— 内置示例 —</option>
+        <option value="diverge">示例1：分叉与 octopus 合并</option>
+        <option value="conflict">示例2：rebase 冲突</option>
+        <option value="cherry">示例3：cherry-pick 依赖</option>
+      </select>
+      <button data-act="help">帮助</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <aside id="left">
+      <section class="panel">
+        <h3>引用</h3>
+        <div id="ref-list"></div>
+      </section>
+      <section class="panel flex">
+        <h3>工作区文件</h3>
+        <div id="work-files"></div>
+        <div id="editor-wrap">
+          <div class="editor-head">
+            <span id="editor-fname">选择文件</span>
+            <div>
+              <button id="file-save" class="mini">保存</button>
+              <button id="file-add" class="mini">＋新文件</button>
+              <button id="file-del" class="mini danger">删除</button>
+            </div>
+          </div>
+          <textarea id="editor" spellcheck="false" placeholder="选择左侧文件进行编辑，然后点「保存」。&#10;保存后内容进入工作区，用顶部「＋ 提交」生成提交。"></textarea>
+        </div>
+      </section>
+    </aside>
+
+    <div id="canvas-wrap">
+      <svg id="graph" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#888"></path>
+          </marker>
+        </defs>
+        <g id="viewport">
+          <g id="edge-layer"></g>
+          <g id="node-layer"></g>
+        </g>
+      </svg>
+      <div id="zoom-ctl">
+        <button id="zoom-in" title="放大">＋</button>
+        <button id="zoom-reset" title="适应窗口">⛶</button>
+        <button id="zoom-out" title="缩小">－</button>
+      </div>
+      <label id="dim-toggle"><input type="checkbox" id="show-unreachable" checked> 显示游离提交</label>
+    </div>
+
+    <aside id="right">
+      <section class="panel flex">
+        <h3>提交详情</h3>
+        <div id="detail"><p class="muted">点击图中的提交节点查看详情。<br>选中的提交可用于 cherry-pick / revert / reset。</p></div>
+      </section>
+      <section class="panel">
+        <h3>图例</h3>
+        <div id="legend" class="muted small"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer id="statusbar"><span id="status-text">就绪</span><span id="status-help"></span></footer>
+</div>
+
+<div id="modal-backdrop" class="hidden">
+  <div id="modal">
+    <h2 id="modal-title"></h2>
+    <div id="modal-body"></div>
+    <div id="modal-foot"></div>
+  </div>
+</div>
+
+<script src="js/diff3.js"></script>
+<script src="js/repo.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/examples.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

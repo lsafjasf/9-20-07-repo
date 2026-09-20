@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git 提交图与变基可视化器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">⎇ Git 提交图与变基可视化器</div>
+  <div class="examples">
+    <span class="muted">示例：</span>
+    <button class="btn" data-example="diverge">① 分叉合并</button>
+    <button class="btn" data-example="rebase">② rebase 冲突</button>
+    <button class="btn" data-example="pick">③ cherry-pick 依赖</button>
+    <button class="btn" id="run-example" title="执行示例推荐的关键操作">▶ 运行示例步骤</button>
+  </div>
+  <div class="history">
+    <button class="btn" id="btn-undo" title="撤销 (Ctrl+Z)">↶ 撤销</button>
+    <button class="btn" id="btn-redo" title="重做 (Ctrl+Y)">↷ 重做</button>
+  </div>
+</header>
+
+<main id="layout">
+  <aside id="sidebar">
+    <section class="card" id="head-card">
+      <h2>HEAD / 引用</h2>
+      <div id="refs-view"></div>
+      <div class="row">
+        <input id="new-branch-name" class="input" placeholder="新分支名">
+        <button class="btn primary" id="btn-branch">建分支</button>
+      </div>
+      <div class="row">
+        <select id="branch-select" class="input"></select>
+        <button class="btn" id="btn-checkout">checkout</button>
+        <button class="btn danger" id="btn-branch-del">删除</button>
+      </div>
+      <div class="row">
+        <input id="new-tag-name" class="input" placeholder="新标签名">
+        <button class="btn primary" id="btn-tag">打标签</button>
+      </div>
+      <div class="row">
+        <select id="tag-select" class="input"></select>
+        <button class="btn danger" id="btn-tag-del">删标签</button>
+      </div>
+      <div class="row">
+        <select id="detach-select" class="input"></select>
+        <button class="btn" id="btn-detach">detach HEAD</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>工作区</h2>
+      <div id="files-view"></div>
+      <details>
+        <summary class="muted small">新建 / 编辑文件</summary>
+        <input id="edit-path" class="input" placeholder="文件路径，如 a.txt">
+        <textarea id="edit-content" class="input mono" rows="5" placeholder="文件内容"></textarea>
+        <div class="row">
+          <button class="btn primary" id="btn-write">写入工作区</button>
+          <button class="btn danger" id="btn-rm">删除文件</button>
+        </div>
+      </details>
+      <div class="row">
+        <button class="btn" id="btn-add">暂存已跟踪</button>
+        <button class="btn" id="btn-add-all">git add -A</button>
+        <button class="btn" id="btn-reset-index">取消全部暂存</button>
+      </div>
+      <div class="row">
+        <input id="commit-msg" class="input" placeholder="提交信息">
+        <button class="btn primary" id="btn-commit">提交</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>历史操作</h2>
+      <div class="row wrap">
+        <select id="merge-select" class="input"></select>
+        <button class="btn primary" id="btn-merge">merge</button>
+        <label class="check small"><input type="checkbox" id="merge-ff-only">仅 ff</label>
+        <label class="check small"><input type="checkbox" id="merge-no-ff">--no-ff</label>
+      </div>
+      <div class="row wrap">
+        <select id="rebase-select" class="input"></select>
+        <button class="btn primary" id="btn-rebase">rebase</button>
+      </div>
+      <div class="row wrap">
+        <span class="muted small">onto</span>
+        <select id="rebase-onto" class="input"></select>
+        <span class="muted small">upstream</span>
+        <select id="rebase-upstream" class="input"></select>
+        <button class="btn primary" id="btn-rebase-onto">rebase --onto</button>
+      </div>
+      <div class="row wrap">
+        <select id="pick-select" class="input"></select>
+        <button class="btn primary" id="btn-pick">cherry-pick</button>
+      </div>
+      <div class="row wrap">
+        <select id="revert-select" class="input"></select>
+        <button class="btn primary" id="btn-revert">revert</button>
+      </div>
+      <div class="row wrap">
+        <select id="reset-select" class="input"></select>
+        <select id="reset-mode" class="input">
+          <option value="soft">--soft</option>
+          <option value="mixed" selected>--mixed</option>
+          <option value="hard">--hard</option>
+        </select>
+        <button class="btn danger" id="btn-reset">reset</button>
+      </div>
+    </section>
+  </aside>
+
+  <section id="canvas-wrap">
+    <div id="example-banner" class="banner hidden"></div>
+    <svg id="graph" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#7a8699"/>
+        </marker>
+      </defs>
+      <g id="viewport">
+        <g id="edge-layer"></g>
+        <g id="node-layer"></g>
+        <g id="label-layer"></g>
+      </g>
+    </svg>
+    <div id="zoom-ctl">
+      <button class="btn" id="zoom-in">＋</button>
+      <button class="btn" id="zoom-out">－</button>
+      <button class="btn" id="zoom-fit">适应</button>
+      <button class="btn" id="zoom-reset">100%</button>
+      <label class="check small"><input type="checkbox" id="toggle-dangling" checked>悬空提交</label>
+    </div>
+  </section>
+
+  <aside id="rightbar">
+    <section class="card">
+      <h2>提交详情</h2>
+      <div id="detail-view"><span class="muted small">点击图中的提交节点查看详情。</span></div>
+    </section>
+    <section class="card">
+      <h2>操作日志</h2>
+      <div id="log-view" class="log small mono"></div>
+    </section>
+  </aside>
+</main>
+
+<div id="conflict-modal" class="modal hidden">
+  <div class="modal-box">
+    <h2 id="conflict-title">合并冲突</h2>
+    <p id="conflict-desc" class="muted small"></p>
+    <div id="conflict-files"></div>
+    <div class="modal-actions">
+      <button class="btn" id="conflict-skip">跳过该提交 (skip)</button>
+      <button class="btn danger" id="conflict-abort">中止 (abort)</button>
+      <button class="btn primary" id="conflict-continue">标记已解决并继续</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/util.js"></script>
+<script src="js/repo.js"></script>
+<script src="js/merge.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/examples.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

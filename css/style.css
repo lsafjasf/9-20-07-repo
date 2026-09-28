@@ -189,3 +189,28 @@ pre.blob{
 .help-cols h4{margin:12px 0 5px;color:var(--accent);font-size:12px}
 .help-cols h4:first-child{margin-top:0}
 kbd{background:var(--panel2);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:11px;font-family:Consolas,monospace}
+
+/* 储藏列表 */
+.stash-item{
+  border:1px solid var(--line);border-radius:7px;padding:7px 9px;margin-bottom:7px;
+  cursor:pointer;
+}
+.stash-item:hover{background:var(--panel2);border-color:#505a66}
+.stash-head{font-size:12px;margin-bottom:2px}
+.stash-paths{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stash-actions{display:flex;gap:6px;margin-top:6px}
+.stash-file{border:1px solid var(--line);border-radius:7px;margin-bottom:10px;overflow:hidden}
+.stash-file .sf-head{padding:6px 10px;background:var(--panel2);font-family:Consolas,monospace;font-size:12px}
+
+/* 引用日志 */
+#reflog-list{max-height:260px;overflow-y:auto}
+.reflog-item{
+  border:1px solid var(--line);border-radius:7px;padding:6px 9px;margin-bottom:6px;
+  font-size:12px;
+}
+.rl-head{display:flex;gap:6px;align-items:baseline}
+.rl-seq{color:var(--muted);font-family:Consolas,monospace;font-size:11px}
+.rl-op{font-weight:600}
+.rl-move{font-family:Consolas,monospace;font-size:11px;color:var(--accent);margin:2px 0}
+.rl-meta{display:flex;gap:8px;align-items:center}
+.rl-meta button{margin-left:auto}

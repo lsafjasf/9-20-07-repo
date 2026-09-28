@@ -12,6 +12,7 @@
     <div class="brand">⎇ GitLab</div>
     <div class="tb-group">
       <button data-act="commit" title="用工作区内容在当前 HEAD 上创建提交">＋ 提交</button>
+      <button data-act="stash" title="把当前工作区改动储藏起来，之后可查看、应用或丢弃">▤ 储藏</button>
       <button data-act="branch" title="在当前提交创建新分支">⑂ 分支</button>
       <button data-act="tag" title="在当前提交打标签">🏷 标签</button>
       <button data-act="checkout-branch" title="切换到其它分支">切换</button>
@@ -46,6 +47,10 @@
       <section class="panel">
         <h3>引用</h3>
         <div id="ref-list"></div>
+      </section>
+      <section class="panel">
+        <h3>储藏</h3>
+        <div id="stash-list"></div>
       </section>
       <section class="panel flex">
         <h3>工作区文件</h3>
@@ -88,6 +93,10 @@
       <section class="panel flex">
         <h3>提交详情</h3>
         <div id="detail"><p class="muted">点击图中的提交节点查看详情。<br>选中的提交可用于 cherry-pick / revert / reset。</p></div>
+      </section>
+      <section class="panel">
+        <h3>引用日志</h3>
+        <div id="reflog-list"></div>
       </section>
       <section class="panel">
         <h3>图例</h3>

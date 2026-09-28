@@ -250,5 +250,109 @@ function mustThrow(name, fn) { try { fn(); fail++; console.log("FAIL (no throw):
   ok("tag resolve", r.resolve("v1") === a);
 }
 
+// 引用日志：与执行过的操作一一对应（条数与内容可断言）
+{
+  const r = new Repo();
+  ok("reflog empty", r.reflog.length === 0);
+  r.saveWorkFile("f", "1"); const a = r.commit("c1");
+  r.saveWorkFile("f", "2"); const b = r.commit("c2");
+  r.createBranch("dev");
+  r.createTag("v1");
+  r.checkoutBranch("dev");
+  r.saveWorkFile("f", "3"); const c = r.commit("c3");
+  r.reset(a, "hard");
+  ok("reflog count == ops", r.reflog.length === 7, r.reflog.length);
+
+  const e = r.reflog;
+  ok("e1 commit creates main",
+    e[0].op === "提交 c1" && e[0].kind === "branch" && e[0].ref === "main" &&
+    e[0].from === null && e[0].to === a, JSON.stringify(e[0]));
+  ok("e2 commit moves main",
+    e[1].op === "提交 c2" && e[1].from === a && e[1].to === b);
+  ok("e3 branch created",
+    e[2].op === "创建分支 dev" && e[2].kind === "branch" &&
+    e[2].from === null && e[2].to === b);
+  ok("e4 tag created",
+    e[3].kind === "tag" && e[3].ref === "v1" && e[3].from === null && e[3].to === b);
+  ok("e5 HEAD switches",
+    e[4].kind === "HEAD" && e[4].fromRef === "main" && e[4].toRef === "dev");
+  ok("e6 commit moves dev",
+    e[5].kind === "branch" && e[5].ref === "dev" && e[5].from === b && e[5].to === c);
+  ok("e7 reset moves dev back",
+    e[6].op.indexOf("reset --hard") === 0 && e[6].from === c && e[6].to === a);
+  ok("entries have time", e.every(x => typeof x.at === "string" && typeof x.time === "number"));
+  ok("seq monotone", e.every((x, i) => x.seq === i + 1));
+
+  // 从历史节点回到某个引用状态：dev 回到 e6 之后的值 c
+  r.restoreReflog(e[5].seq);
+  ok("restore moves branch", r.branches.dev === c);
+  ok("restore syncs worktree", r.worktree["f"] === "3");
+  ok("restore itself logged", r.reflog.length === 8 &&
+    r.reflog[7].op.indexOf("回退 dev") === 0 &&
+    r.reflog[7].from === a && r.reflog[7].to === c, JSON.stringify(r.reflog[7]));
+
+  // 撤销不抹掉日志，且撤销本身也入日志
+  r.undo();
+  ok("undo appends reflog", r.reflog.length === 9 &&
+    r.reflog[8].op.indexOf("撤销：") === 0 && r.reflog[8].to === a);
+  ok("undo restore state", r.branches.dev === a);
+  r.redo();
+  ok("redo appends reflog", r.reflog.length === 10 &&
+    r.reflog[9].op.indexOf("重做：") === 0 && r.branches.dev === c);
+
+  // HEAD 条目回退：e5 记录 HEAD 从 main 切到 dev，回到该状态应附着 dev
+  r.checkoutBranch("main");
+  r.restoreReflog(e[4].seq);
+  ok("restore HEAD entry", !r.head.detached && r.head.ref === "dev");
+  ok("restore HEAD logged", r.reflog[r.reflog.length - 1].kind === "HEAD" &&
+    r.reflog[r.reflog.length - 1].toRef === "dev");
+}
+
+// 储藏：保存 / 摘要 / 应用 / 丢弃，且不产生引用日志
+{
+  const r = new Repo();
+  r.saveWorkFile("f", "1"); r.commit("base");
+  const logBefore = r.reflog.length;
+
+  mustThrow("stash nothing", () => r.stashSave("x"));
+  r.saveWorkFile("f", "2"); r.saveWorkFile("g", "new");
+  const st = r.stashSave("wip feature");
+  ok("stash saved", r.stashes.length === 1 && st.message === "wip feature");
+  ok("stash cleans worktree", r.worktree["f"] === "1" && !("g" in r.worktree));
+  ok("stash keeps base", st.baseSha === r.headSha());
+
+  const sum = r.stashSummary(st.id);
+  ok("stash summary", sum.files === 2 && sum.mods.length === 1 &&
+    sum.adds.length === 1 && sum.dels.length === 0, JSON.stringify(sum));
+  ok("stash summary paths", sum.paths.join(",") === "g,f" || sum.paths.join(",") === "f,g"
+    ? sum.paths.includes("f") && sum.paths.includes("g") : false);
+
+  r.saveWorkFile("h", "other");
+  r.stashApply(st.id);
+  ok("apply restores", r.worktree["f"] === "2" && r.worktree["g"] === "new");
+  ok("apply keeps other changes", r.worktree["h"] === "other");
+  ok("apply keeps stash", r.stashes.length === 1);
+
+  r.stashDrop(st.id);
+  ok("drop removes", r.stashes.length === 0);
+  mustThrow("drop missing", () => r.stashDrop(st.id));
+  mustThrow("apply missing", () => r.stashApply(st.id));
+
+  // 应用冲突：储藏改动与工作区改动撞在同一处
+  r.saveWorkFile("f", "stash-side");
+  const st2 = r.stashSave("conflict wip");
+  r.saveWorkFile("f", "work-side");
+  mustThrow("apply conflict", () => r.stashApply(st2.id));
+  ok("conflict apply rolls back", r.worktree["f"] === "work-side" && r.stashes.length === 1);
+
+  // 储藏操作不移动引用 -> 不产生引用日志
+  ok("stash adds no reflog", r.reflog.length === logBefore,
+    r.reflog.length - logBefore);
+
+  // 储藏可撤销
+  r.undo(); // undo stashSave(st2)
+  ok("undo stash restores worktree", r.worktree["f"] === "stash-side" && r.stashes.length === 0);
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

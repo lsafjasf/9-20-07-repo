@@ -14,6 +14,8 @@
   function render() {
     view.render();
     renderRefs();
+    renderStash();
+    renderReflog();
     renderWorkFiles();
     renderDetail();
     renderStatus();
@@ -247,6 +249,11 @@
           ui.guard(() => repo.commit(v.trim()), "已提交 ✓");
         });
         break;
+      case "stash":
+        ui.prompt("储藏工作区改动", "储藏说明（可留空）", "", (v) => {
+          ui.guard(() => repo.stashSave(v), "已储藏，工作区已恢复干净 ✓");
+        }, { okText: "储藏" });
+        break;
       case "branch":
         ui.prompt("创建分支", "分支名（基于当前 HEAD）", "feature/x", (v) => {
           if (!v.trim()) return true;
@@ -329,6 +336,114 @@
         ui.openHelp();
         break;
     }
+  }
+
+  /* ---------------- 储藏列表 ---------------- */
+
+  function renderStash() {
+    const box = $("#stash-list");
+    if (!repo.stashes.length) {
+      box.innerHTML = '<p class="muted small">暂无储藏。顶栏「▤ 储藏」可收起当前工作区改动。</p>';
+      return;
+    }
+    box.innerHTML = repo.stashes.map((s, i) => {
+      const sum = repo.stashSummary(s);
+      return '<div class="stash-item" data-id="' + s.id + '">' +
+        '<div class="stash-head"><b>stash@{' + i + '}</b> ' + escapeHtml(s.message) + "</div>" +
+        '<div class="muted small">基于 ' + (s.baseSha ? s.baseSha.slice(0, 7) : "（空）") +
+        " · " + sum.files + " 个文件（+" + sum.adds.length +
+        " ~" + sum.mods.length + " -" + sum.dels.length + "）</div>" +
+        '<div class="stash-paths muted small">' +
+        sum.paths.slice(0, 4).map(escapeHtml).join("、") +
+        (sum.paths.length > 4 ? " …" : "") + "</div>" +
+        '<div class="stash-actions">' +
+        '<button class="mini" data-stash-act="apply" data-id="' + s.id + '">应用</button>' +
+        '<button class="mini danger" data-stash-act="drop" data-id="' + s.id + '">丢弃</button>' +
+        "</div></div>";
+    }).join("");
+    box.querySelectorAll(".stash-item").forEach(el => {
+      el.onclick = (e) => {
+        if (e.target.closest("button")) return;
+        openStashDetail(repo.stashes.find(s => s.id === el.dataset.id));
+      };
+    });
+    box.querySelectorAll("[data-stash-act]").forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.id;
+        if (btn.dataset.stashAct === "apply")
+          ui.guard(() => repo.stashApply(id), "储藏已应用 ✓");
+        else
+          ui.guard(() => repo.stashDrop(id), "储藏已丢弃");
+      };
+    });
+  }
+
+  function openStashDetail(st) {
+    if (!st) return;
+    const sum = repo.stashSummary(st);
+    const fileBlock = (p, tag) =>
+      '<div class="stash-file"><div class="sf-head"><span class="file-status f-' + tag + '">' +
+      tag + "</span> " + escapeHtml(p) + "</div>" +
+      (tag === "D"
+        ? '<pre class="blob muted">（储藏中该文件被删除）</pre>'
+        : '<pre class="blob">' + escapeHtml(st.tree[p]) + "</pre>") + "</div>";
+    const html =
+      '<p class="muted small">基于 ' + (st.baseSha ? st.baseSha.slice(0, 7) : "（空）") +
+      " · 分支 " + escapeHtml(st.branch || "HEAD(detached)") + " · 逻辑时间 t=" + st.time + "</p>" +
+      sum.mods.map(p => fileBlock(p, "M")).join("") +
+      sum.adds.map(p => fileBlock(p, "A")).join("") +
+      sum.dels.map(p => fileBlock(p, "D")).join("");
+    ui.open("储藏内容 — " + st.message, html, [
+      {
+        text: "丢弃该储藏", left: true, danger: true,
+        onClick: () => { ui.guard(() => repo.stashDrop(st.id), "储藏已丢弃"); }
+      },
+      {
+        text: "应用到工作区", primary: true,
+        onClick: () => ui.guard(() => repo.stashApply(st.id), "储藏已应用 ✓") === undefined
+      }
+    ]);
+  }
+
+  /* ---------------- 引用日志 ---------------- */
+
+  function reflogRefLabel(e) {
+    if (e.kind === "HEAD") return "HEAD";
+    return (e.kind === "tag" ? "🏷 " : "⑂ ") + e.ref;
+  }
+
+  function reflogVal(e, side) {
+    const sha = side === "from" ? e.from : e.to;
+    const ref = side === "from" ? e.fromRef : e.toRef;
+    if (e.kind === "HEAD" && ref) return "⑂ " + ref;
+    return sha ? sha.slice(0, 7) : "（无）";
+  }
+
+  function renderReflog() {
+    const box = $("#reflog-list");
+    if (!repo.reflog.length) {
+      box.innerHTML = '<p class="muted small">暂无记录。每次引用移动都会在此留下轨迹。</p>';
+      return;
+    }
+    box.innerHTML = repo.reflog.slice().reverse().map(e =>
+      '<div class="reflog-item">' +
+      '<div class="rl-head"><span class="rl-seq">#' + e.seq + "</span> " +
+        '<span class="rl-op">' + escapeHtml(e.op) + "</span></div>" +
+      '<div class="rl-move">' + escapeHtml(reflogRefLabel(e)) + "： " +
+        escapeHtml(reflogVal(e, "from")) + " → " + escapeHtml(reflogVal(e, "to")) + "</div>" +
+      '<div class="rl-meta muted small">t=' + e.time + " · " +
+        escapeHtml((e.at || "").slice(11, 19)) +
+        ' <button class="mini" data-restore="' + e.seq + '">回到此状态</button>' +
+      "</div></div>").join("");
+    box.querySelectorAll("[data-restore]").forEach(btn => {
+      btn.onclick = () => {
+        const seq = +btn.dataset.restore;
+        ui.guard(() => {
+          repo.restoreReflog(seq);
+          view.selectedSha = repo.headSha();
+        }, "已回到日志 #" + seq + " 记录的引用状态 ✓");
+      };
+    });
   }
 
   function uniqueResetTargets() {

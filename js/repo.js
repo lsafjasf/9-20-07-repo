@@ -26,7 +26,13 @@
       this.counter = 0;
       this.history = [];
       this.future = [];
+      this.stashes = [];
+      this._stashSeq = 0;
+      // 引用日志（reflog）：只增不减，撤销/重做不会抹掉历史轨迹
+      this.reflog = [];
+      this._reflogSeq = 0;
       this._changeListeners = [];
+      this._reflogBase = this._refState();
     }
 
     onChange(fn) { this._changeListeners.push(fn); }
@@ -152,7 +158,7 @@
       return JSON.stringify({
         commits: this.commits, branches: this.branches, tags: this.tags,
         head: this.head, worktree: this.worktree, pending: this.pending,
-        counter: this.counter
+        counter: this.counter, stashes: this.stashes, _stashSeq: this._stashSeq
       });
     }
 
@@ -161,7 +167,164 @@
       this.commits = s.commits; this.branches = s.branches; this.tags = s.tags;
       this.head = s.head; this.worktree = s.worktree; this.pending = s.pending;
       this.counter = s.counter;
+      this.stashes = s.stashes || []; this._stashSeq = s._stashSeq || 0;
       this._emit();
+    }
+
+    /* ---------- 引用日志（reflog） ---------- */
+
+    // 当前全部引用的可比较快照：分支、标签，以及 HEAD 的附着状态。
+    // 附着 HEAD 随分支移动时不重复记 HEAD 条目（分支条目已表达），
+    // 只有 HEAD 自身切换附着 / 游离移动时才记 HEAD 条目。
+    _refState() {
+      return {
+        branches: Object.assign({}, this.branches),
+        tags: Object.assign({}, this.tags),
+        head: this.head.detached ? "D:" + this.head.sha : "B:" + this.head.ref,
+        headSha: this.head.detached ? this.head.sha : (this.branches[this.head.ref] || null),
+        headRef: this.head.detached ? null : this.head.ref
+      };
+    }
+
+    // 把自上次记录以来的引用净变化追加为日志条目（每个引用一条）
+    _collectReflog(op) {
+      const cur = this._refState();
+      const prev = this._reflogBase;
+      const push = (kind, ref, from, to, extra) => {
+        this.reflog.push(Object.assign({
+          seq: ++this._reflogSeq,
+          op, kind, ref, from, to,
+          time: this.counter,
+          at: new Date().toISOString()
+        }, extra || {}));
+        if (this.reflog.length > 500) this.reflog.shift();
+      };
+      const branchNames = new Set([...Object.keys(prev.branches), ...Object.keys(cur.branches)]);
+      for (const n of branchNames) {
+        const a = prev.branches[n] != null ? prev.branches[n] : null;
+        const b = cur.branches[n] != null ? cur.branches[n] : null;
+        if (a !== b) push("branch", n, a, b);
+      }
+      const tagNames = new Set([...Object.keys(prev.tags), ...Object.keys(cur.tags)]);
+      for (const n of tagNames) {
+        const a = prev.tags[n] != null ? prev.tags[n] : null;
+        const b = cur.tags[n] != null ? cur.tags[n] : null;
+        if (a !== b) push("tag", n, a, b);
+      }
+      if (prev.head !== cur.head) {
+        push("HEAD", "HEAD", prev.headSha, cur.headSha,
+          { fromRef: prev.headRef, toRef: cur.headRef });
+      }
+      this._reflogBase = cur;
+    }
+
+    // 从历史条目回到该条目记录后的引用状态（回退本身也记入日志）
+    restoreReflog(seq) {
+      const e = this.reflog.find(x => x.seq === seq);
+      if (!e) throw new GitError("没有该日志条目：" + seq);
+      const label = "回退 " + (e.kind === "HEAD" ? "HEAD" : e.ref) + " 到日志 #" + e.seq;
+      return this._transaction(label, () => {
+        if (e.kind === "branch") {
+          if (e.to === null) {
+            if (!this.head.detached && this.head.ref === e.ref)
+              throw new GitError("该状态要求删除当前所在分支，无法回退");
+            delete this.branches[e.ref];
+          } else {
+            if (!this.commits[e.to]) throw new GitError("目标提交已不存在：" + e.to);
+            const isCurrent = !this.head.detached && this.head.ref === e.ref;
+            if (isCurrent && this.worktreeStatus().some(r => r.status !== "C"))
+              throw new GitError("工作区有未提交改动，请先提交、储藏或 reset --hard");
+            this.branches[e.ref] = e.to;
+            if (isCurrent) this.worktree = this.treeAt(e.to);
+          }
+        } else if (e.kind === "tag") {
+          if (e.to === null) delete this.tags[e.ref];
+          else {
+            if (!this.commits[e.to]) throw new GitError("目标提交已不存在：" + e.to);
+            this.tags[e.ref] = e.to;
+          }
+        } else { // HEAD
+          if (e.toRef) {
+            if (this.worktreeStatus().some(r => r.status !== "C"))
+              throw new GitError("工作区有未提交改动，请先提交、储藏或 reset --hard");
+            this.head = { detached: false, ref: e.toRef, sha: null };
+            this.worktree = this.treeAt(this.branches[e.toRef]);
+          } else {
+            if (!this.commits[e.to]) throw new GitError("目标提交已不存在：" + e.to);
+            if (this.worktreeStatus().some(r => r.status !== "C"))
+              throw new GitError("工作区有未提交改动，请先提交、储藏或 reset --hard");
+            this.head = { detached: true, ref: null, sha: e.to };
+            this.worktree = this.treeAt(e.to);
+          }
+        }
+        return e;
+      });
+    }
+
+    /* ---------- 储藏（stash） ---------- */
+
+    stashSave(message) {
+      if (this.pending) throw new GitError("请先结束当前进行中的操作");
+      const changes = this.worktreeStatus().filter(r => r.status !== "C");
+      if (!changes.length) throw new GitError("工作区没有可储藏的改动");
+      return this._transaction("stash 储藏（" + changes.length + " 个文件）", () => {
+        const entry = {
+          id: "stash-" + (++this._stashSeq),
+          message: (message || "").trim() ||
+            "WIP on " + (this.head.detached ? "HEAD" : this.head.ref),
+          baseSha: this.headSha(),
+          branch: this.head.detached ? null : this.head.ref,
+          tree: Object.assign({}, this.worktree),
+          time: this.counter
+        };
+        this.stashes.unshift(entry);
+        this.worktree = this.headSha() ? this.treeAt(this.headSha()) : {};
+        return entry;
+      });
+    }
+
+    stashApply(id) {
+      if (this.pending) throw new GitError("请先结束当前进行中的操作");
+      const st = this.stashes.find(s => s.id === id);
+      if (!st) throw new GitError("找不到储藏：" + id);
+      return this._transaction("stash apply " + st.message, () => {
+        const base = st.baseSha ? this.treeAt(st.baseSha) : {};
+        const r = this._mergeTrees(base, Object.assign({}, this.worktree), st.tree,
+          "工作区", st.message);
+        if (r.conflicts.length)
+          throw new GitError("应用储藏时冲突：" + r.conflicts.map(c => c.path).join("、"));
+        this.worktree = r.tree;
+        return st;
+      });
+    }
+
+    stashDrop(id) {
+      const idx = this.stashes.findIndex(s => s.id === id);
+      if (idx < 0) throw new GitError("找不到储藏：" + id);
+      return this._transaction("stash drop " + this.stashes[idx].message, () => {
+        this.stashes.splice(idx, 1);
+      });
+    }
+
+    // 内容摘要：相对储藏时的基线提交，新增/修改/删除了哪些文件
+    stashSummary(id) {
+      const st = typeof id === "object" && id ? id : this.stashes.find(s => s.id === id);
+      if (!st) throw new GitError("找不到储藏：" + id);
+      const base = st.baseSha ? this.treeAt(st.baseSha) : {};
+      const has = (o, p) => Object.prototype.hasOwnProperty.call(o, p);
+      const paths = new Set([...Object.keys(base), ...Object.keys(st.tree)]);
+      const adds = [], mods = [], dels = [];
+      for (const p of [...paths].sort()) {
+        const inB = has(base, p), inT = has(st.tree, p);
+        if (inB && !inT) dels.push(p);
+        else if (!inB && inT) adds.push(p);
+        else if (base[p] !== st.tree[p]) mods.push(p);
+      }
+      return {
+        adds, mods, dels,
+        paths: [...adds, ...mods, ...dels],
+        files: adds.length + mods.length + dels.length
+      };
     }
 
     _transaction(label, fn) {
@@ -171,6 +334,7 @@
         this.history.push({ label, before, after: this._snapshot() });
         if (this.history.length > 200) this.history.shift();
         this.future = [];
+        this._collectReflog(label);
         this._emit();
         return result;
       } catch (e) {
@@ -187,6 +351,7 @@
           if (top && top.label === label) top.after = this._snapshot();
           else this.history.push({ label, before: this._snapshot(), after: this._snapshot() });
           this.future = [];
+          this._collectReflog(label);
           this._emit();
         }
       };
@@ -197,6 +362,7 @@
       if (!h) throw new GitError("没有可撤销的操作");
       this.future.push(h);
       this._restore(h.before);
+      this._collectReflog("撤销：" + h.label);
       return h.label;
     }
 
@@ -205,6 +371,7 @@
       if (!h) throw new GitError("没有可重做的操作");
       this.history.push(h);
       this._restore(h.after);
+      this._collectReflog("重做：" + h.label);
       return h.label;
     }
 
